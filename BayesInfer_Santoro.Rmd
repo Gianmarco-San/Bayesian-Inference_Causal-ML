@@ -1,0 +1,981 @@
+---
+title: "Bayesian Inference & Causal ML | Gianmarco S."
+output: html_notebook
+---
+
+
+# Experimental Studies | JOBS II
+
+```{r}
+library(haven)
+library(MCMCpack)
+library(mvtnorm)
+
+# clean workspace
+rm(list=ls()) 
+
+# set working directory in RStudio to directory where currently active script
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+```
+
+
+## 1. Load dataset
+
+```{r}
+# import file
+df_jobs <- read_dta('JOBSII_HR.dta')
+df_jobs
+```
+Only 54% of individuals who were assigned to the intervention actually received the treatment.
+In the literature, this problem is known as noncompliance.
+Here we ignore noncompliance issues focusing on assessing causal effects of the assignment to the treatment (Intention-to-treat analysis).
+
+So, I drop the W variable and focus on the assignment variable Z for assessing the causal effects of the treatment to ensures that analysis aligns with the intention-to-treat principle.
+
+```{r}
+# Drop the W variable
+df_jobs <- df_jobs[, !(names(df_jobs) == "W")]
+# df_jobs
+
+### Extra
+table(df_jobs$Z)
+prop.table(table(df_jobs$Z))
+# table(df_jobs$Z, df_jobs$motivation)
+# summary(df_jobs$motivation)
+# unique(df_jobs$motivation)
+```
+
+
+### Visualization
+
+```{r}
+# Outcome variables
+outcome_vars <- c('depress6', 'employ6')
+
+par(mfrow=c(1, 2))
+
+for (var in outcome_vars) {
+  hist(df_jobs[[var]], freq=FALSE, main=paste(var,"| post treatment"), xlab=NULL, col="#FC4E07")}
+
+#
+outcome_vars <- c('depress0', 'depress6')
+
+par(mfrow=c(2, 2))
+
+for (var in outcome_vars) {hist(df_jobs[[var]][df_jobs$Z == 0], freq=FALSE, main=paste(var, "Control", sep=" | "), xlab=NULL, col="#FC4E07")}
+for (var in outcome_vars) {hist(df_jobs[[var]][df_jobs$Z == 1], freq=FALSE, main=paste(var, "Treat", sep=" | "), xlab=NULL, col="#00AFBB")}
+
+#
+outcome_vars <- c('depress0', 'depress6')
+
+par(mfrow=c(1, 2))
+
+for (var in outcome_vars) {
+  hist(df_jobs[[var]], freq=FALSE, main=var, xlab=NULL, col="#FC4E07")}
+
+
+# Binary variables
+bin_vars <- c('sex', 'race', 'nonmarried') 
+
+par(mfrow=c(length(bin_vars), 3))
+
+
+for (var in bin_vars) {
+  
+  hist(df_jobs[[var]][df_jobs$Z == 0], xlab=NULL, main=paste(var, "Control", sep=" | "), col="#FC4E07")
+  
+  hist(df_jobs[[var]][df_jobs$Z == 1], xlab=NULL, main=paste(var, "Treat", sep=" | "), col="#00AFBB")
+  
+  hist(df_jobs[[var]], freq=FALSE, main=paste(var), xlab=NULL, col="green")
+  }
+
+
+# Pre-treatment continuous variables
+cont_pre_vars <- c('age', 'educ', 'EconHard', 'assertive', 'motivation', 'depress0')
+
+# Pre-treatment continuous variables
+rows <- 1.5
+par(mfrow=c(2*rows, length(cont_pre_vars)/rows))
+
+for (var in cont_pre_vars) {
+  hist(df_jobs[[var]][df_jobs$Z == 0], xlab=NULL, main=paste(var, "Control", sep=" | "), col="#FC4E07")
+  
+  hist(df_jobs[[var]][df_jobs$Z == 1], xlab=NULL, main=paste(var, "Treat", sep=" | "), col="#00AFBB")
+  }
+
+
+# Reset par
+par(mfrow=c(1,1))
+```
+Looking at covariates it seems to be a similar distribution among the assignment to Control or Treatment. 
+Considering depress0 there is an higher density for the low values in treatment group.
+
+Looking at depress before and after treatment, for both control and treatment groups there is a shift to the lower levels of depression, showing the possibility that some other factors helped people, not only treatment in our study.
+
+
+
+## 2. For each variable, calculate the mean for the whole sample and within each treatment group. 
+For continuous covariates, also report the medians, standard deviation and ranges within each treatment group. 
+Record your results in a table. 
+In a few sentences, comment on what you see and whether it is expected.
+
+```{r}
+# header <- colnames(df_jobs)
+
+all_var <- c("sex", "age", "race", "nonmarried", "educ", "EconHard", "assertive", "motivation", "depress0", "Z", "employ6", "depress6")
+
+# Mean, sd, median, range by treatment of continuous vars
+continuous_var <- c('age', 'educ', 'EconHard', 'assertive', 'motivation', 'depress0', 'depress6')
+
+
+# Descriptive statistics
+All_stat<-data.frame( cbind(
+      apply(df_jobs[,all_var], 2,mean), 
+      
+      apply(df_jobs[df_jobs$Z==0,all_var], 2,mean),
+      
+      apply(df_jobs[df_jobs$Z==1,all_var], 2,mean)))
+
+colnames(All_stat)<- c("Mean", " Mean-C", " Mean-T")
+round(All_stat,2)
+
+Cont_stat<-data.frame( cbind(
+      apply(df_jobs[df_jobs$Z==0,continuous_var], 2, median),
+      
+      apply(df_jobs[df_jobs$Z==1,continuous_var], 2, median),
+      
+      apply(df_jobs[df_jobs$Z==0,continuous_var], 2, sd),
+      
+      apply(df_jobs[df_jobs$Z==1,continuous_var], 2, sd),
+      
+      apply(df_jobs[df_jobs$Z==0,continuous_var], 2, min),
+      
+      apply(df_jobs[df_jobs$Z==1,continuous_var], 2, min),
+      
+      apply(df_jobs[df_jobs$Z==0,continuous_var], 2, max),
+      
+      apply(df_jobs[df_jobs$Z==1,continuous_var], 2, max)))
+
+colnames(Cont_stat)<- c(" Median-C", " Median-T", " s.d.-C", " s.d.-T", " Min-C", " Min-T", " Max-C", " Max-T")
+round(Cont_stat,2)
+
+Stat <- merge(All_stat, Cont_stat, by="row.names", all = TRUE)
+Stat
+```
+In terms of randomization, considering for example the variable "age", the mean value and standard deviation are quite the same for treated and non-treated groups, but it has a little significant difference between max age, 69 vs 61. Also by sex, there's a 7 % discard between the two groups, along with other not-so-similar distributions like race, marital status. Could this maybe affect the results?
+
+The depression level looks a little lower in the treatment group, that could be taken into account considering the outcome "depress6".
+In both cases there is a drop down in the mean value of depression from pre to post treatment time.
+
+In terms of employment at the end of the 6 months, there's a difference in terms of mean value, but I have no pre-treatment values to do any consideration about. Speculating with Economic Hardness it seems to underline the effect of the treatment in employment status.
+
+
+## 3. Fisher exact p−value approach. Outcome variable: “depression six months after the intervention assignment.”
+```{r}
+N  <- nrow(df_jobs)        # total sample size
+Nt <- sum(df_jobs$Z==1)    # number of treated units
+Nc <- sum(df_jobs$Z==0)    # number of controls
+
+c(N, Nt, Nc)
+```
+
+
+```{r}
+##--------------------------------------------#
+## Fisher's Exact p-value
+##--------------------------------------------#
+
+## Sharp null hypothesis that the treatment had no effect 
+## H0: Yi(1)=Yi(0) for i=1,...,N
+
+## Considering outcome variable: “depression six months after the intervention assignment”
+
+
+# possible combinations
+nass <- choose(N,Nt) # number of assignment vectors
+nass # we should compute the average treatment effect for each of them...
+
+```
+
+### (a) Approximate using 5000 draws from the randomization distribution, the exact Fisher p−values for a sharp null hypothesis of zero treatment effects using the following two statistics: 
+Absolute value of the difference in average outcomes by treatment status
+Absolute value of the difference in average ranks by treatment status.
+```{r}
+# Absolute value of the difference in average outcomes by treatment status:
+dif.ave.obs <- mean(df_jobs$depress6[df_jobs$Z==1]) - mean(df_jobs$depress6[df_jobs$Z==0])
+dif.ave.obs
+
+Tobs.dif.ave  <- abs(dif.ave.obs)
+Tobs.dif.ave
+```
+
+
+```{r}
+# This function assigns ranks to the values, and the ties.method = "average" argument specifies how to handle tied values. When there are tied values (values that are the same), the "average" method assigns the average of the ranks to those tied values.
+# The 'r' variable will now contain the ranks corresponding to the original values in 'depress6'. This kind of transformation is often used in non-parametric statistics or when the assumptions of normality are not met.
+
+r <- rank(df_jobs$depress6, ties.method = "average")
+
+dif.obs.r <- mean(r[df_jobs$Z==1]) - mean(r[df_jobs$Z==0])
+dif.obs.r
+
+Tobs.dif.r <- abs(dif.obs.r)
+Tobs.dif.r
+```
+
+
+```{r}
+# We test the Sharp null against - so potential outcomes with or without treatment are the same, and we can construct them
+
+# fix a seed for reproducibility
+set.seed(23)
+
+# P-values estimated using K draws from the randomization distribution:
+K <- 5000 
+
+p.ave <- p.r <- 0  # P.value
+Tdif.ave.dist <- Tdif.dist.r <- NULL  # initializing vectors
+
+
+# at every iteration sample a N dimention vector in q
+for(k in 1:K){
+  Z.sim <- sample(df_jobs$Z, N, replace=FALSE)  # simulation, doesn't metter if with replacement or not
+  
+  dif.ave <- mean(df_jobs$depress6[Z.sim==1]) - mean(df_jobs$depress6[Z.sim==0]) # mean diff
+  Tdif.ave <- abs(dif.ave)  # abs value
+  Tdif.ave.dist <- c(Tdif.ave.dist, Tdif.ave)  # Appends Tdif.ave to Tdif.ave.dist to keep track of distribution under null hypothesis
+  p.ave <- p.ave + 1*(Tdif.ave>=Tobs.dif.ave)  # Updates a counter if observed mean difference is greater than to simulated mean differences
+  
+  # Rank
+  dif.r <- mean(r[Z.sim==1]) - mean(r[Z.sim==0])
+  Tdif.r <- abs(dif.r)
+  Tdif.dist.r <- c(Tdif.dist.r, Tdif.r)
+  p.r <- p.r + 1*(Tdif.r >= Tobs.dif.r)
+  }
+
+p.ave <- p.ave/K
+p.r   <- p.r/K
+
+c(Tobs.dif.ave, Tobs.dif.r, p.ave, p.r)
+
+```
+Under the null hypothesis of no effect of the program, having a p-value of 0.09 and 0.08 make no sufficient evidence to strongly reject the null hypothesis.
+
+
+```{r}
+par(mfrow=c(1,2))
+
+hist(Tdif.ave.dist, freq=TRUE, main="Abs diff in average outcomes",
+     breaks=100,
+     xlab=NULL)
+
+abline(v=Tobs.dif.ave, col="forestgreen",lwd=2) 
+
+
+hist(Tdif.dist.r, freq=TRUE, main="Abs diff in average ranks",
+     breaks=100,
+     xlab=NULL)
+
+abline(v=Tobs.dif.r, col="forestgreen",lwd=2) 
+```
+
+
+### (b) Calculate a 90% Fisher interval for a constant additive treatment effect using the absolute value of the difference in average out- comes by treatment status as test statistic.
+
+```{r}
+### Interval estimates based on FEP (simulated p-values)
+# Fisher interval for a common additive effect
+# H0: Y(1) = Y(0) + tau
+
+tau <- seq(-.5, .5, by=.05)
+p.dif <- rep(0, length(tau))
+Tobs.dif <- NULL
+
+
+for(k in 1:K){
+  Z.sim <- sample(df_jobs$Z, N, replace=FALSE)
+  
+  for(j in 1:length(tau)){
+    
+    #Imputed df_jobs under the null hypothesis
+    Y0 <- df_jobs$depress6*(df_jobs$Z==0) + (df_jobs$depress6-tau[j])*(df_jobs$Z==1)
+    Y1 <- df_jobs$depress6*(df_jobs$Z==1) + (df_jobs$depress6+tau[j])*(df_jobs$Z==0)
+    
+    Tobs.dif[j] <- abs(mean(df_jobs$depress6[df_jobs$Z==1]) - mean(df_jobs$depress6[df_jobs$Z==0]) - tau[j])
+    
+    Tdif <- abs(mean(Y1[Z.sim==1]) - mean(Y0[Z.sim==0]) - tau[j])
+    
+    p.dif[j]<- p.dif[j] + 1 * (Tdif>=Tobs.dif[j])
+    }
+    }
+
+p.dif<- p.dif/K
+
+FCI<-cbind(tau, Tobs.dif, p.dif)
+FCI
+```
+Confidence interval: I seek a 90% Fisher interval for a constant additive treatment. Considering the test statistics performed, it's not so extreme to rejected the null hypothesis in the interval where p-values are greater than 0.1, so the corresponding taus range is [-0.25, -0.05].
+
+
+
+## 4. Neyman’s Repeated Sampling Approach. Outcome variable: “depression six months after the intervention assignment.”
+### (a) Calculate an unbiased estimate of the average treatment effect.
+
+```{r}
+##--------------------------------------------#
+## Neyman's Repeated Sampling Approach
+##--------------------------------------------#
+
+Yobs <- df_jobs$depress6
+Z    <- df_jobs$Z
+
+tau.dif<- mean(Yobs[Z==1]) - mean(Yobs[Z==0])
+tau.dif
+```
+Avarage treatment effect.
+
+
+```{r}
+# Estimates of the sample variance of the potential control outcome
+s2.c<- var(Yobs[Z==0])
+s2.c
+```
+
+
+```{r}
+# Estimates of the sample variance of the potential treated outcome
+s2.t<- var(Yobs[Z==1])
+s2.t
+```
+
+
+```{r}
+## Estimates of the variance of the treatment effect estimators
+Vneyman <- s2.c/Nc + s2.t/Nt
+Vneyman
+```
+
+
+(b) Apply Neyman’s method to construct a 90% large sample confidence interval for the average treatment effect
+
+```{r}
+## Confidence intervals: 
+#  1-alpha = 0.9, so 1 - (alpha/2) = 0.95
+X <- qnorm(0.95)
+
+c(tau.dif - X * sqrt(Vneyman), tau.dif + X * sqrt(Vneyman))
+```
+The confidence interval found is similar to the one computed by Fisher (above).
+
+The negative values in the interval indicate that there is a statistically significant decrease in the outcome variable associated with the treatment based on Neyman's method.
+
+
+```{r}
+## Testing
+## Hypotheses:  
+#  H0: tau.dif  = 0 vs 
+#  H1: tau.dif != 0
+tneyman <- (tau.dif-0)/sqrt(Vneyman)  # test statistic for the Neyman test
+tneyman
+```
+
+
+```{r}
+# p-value based on the normal approximation
+2*(1-pnorm(abs(tneyman)))  # gives the cumulative distribution function (CDF) of the standard normal distribution
+```
+Given a p-value of 0.09938631, it suggests that the observed estimate is not significantly different from zero at a conventional significance level of 0.05. However, we're interested in constructing a 90% confidence interval, the fact that the interval does not include zero would suggest that we might slightly reject the null hypothesis in favor of alternative one of non-zero-effect.
+
+
+## 5. Bayesian model-based analysis. Bayesian model-based analysis for the outcome variable “depression six months after the intervention assignment.” Assume that Yi(0) and Yi(1) are independent and are both log-normally distributed.
+
+Derive the posterior distributions of the finite sample average causal effect and the super-population average causal effect. 
+Plot the resulting posterior distributions in a histogram and report the following summary statistics of the resulting posterior distributions: mean, standard deviation, median, 2.5% and 97.5% percentiles.
+
+```{r}
+mcmc.m5 <- function(niter, nburn, thin=1,   
+                    par.prior,
+                    Outcome.obs, W,
+                    seed=NULL, theta.start=NULL, cred.level=0.95){ 
+  
+    Yobs <- log(Outcome.obs)  # logarithm transformation
+    
+    Nc<- sum(1-W); Nt<- sum(W); N<- Nt+Nc
+    yobs.c<-mean(Yobs[W==0]); yobs.t<-mean(Yobs[W==1])
+    
+    draws<- seq((nburn+1), niter, by=thin)
+    ndraws<- length(draws)
+    j <- 0 # Counter j=1...ndraws
+    
+    # Start values
+    if(is.null(theta.start)==TRUE){
+
+    theta <- list(beta.c  = mean(Yobs[W==0]) + rnorm(1,0, 0.1),
+                  beta.t  = mean(Yobs[W==1]) + rnorm(1,0, 0.1),
+                  sigma2.c = var(Yobs[W==0]) + rnorm(1,0, 0.01),
+                  sigma2.t = var(Yobs[W==1]) + rnorm(1,0, 0.01)
+                  )
+
+    }else{theta<- theta.start}
+  
+  
+    Theta <- matrix(NA, ndraws,  length(unlist(theta)) )
+    colnames(Theta) <- names(theta)
+    
+    Estimands<- matrix(NA, ndraws, 2)
+    colnames(Estimands)<- c("ate.fs", "ate.sp")
+    
+    if(is.null(seed)==FALSE){
+      set.seed(seed)}
+
+    for(l in 1:niter){
+    
+    ##Update beta.c
+    tau2.c.obs   <- 1/{Nc/theta$sigma2.c + 1/par.prior$tau2.c}
+    nu.c.obs     <- tau2.c.obs*{(yobs.c*Nc)/theta$sigma2.c + par.prior$nu.c/par.prior$tau2.c}
+    theta$beta.c <- rnorm(1, nu.c.obs, sqrt(tau2.c.obs))
+    
+    ##Update beta.t
+    tau2.t.obs   <- 1/{Nt/theta$sigma2.t+ 1/par.prior$tau2.t}
+    nu.t.obs     <- tau2.t.obs*{(yobs.t*Nt)/theta$sigma2.t + par.prior$nu.t/par.prior$tau2.t}
+    theta$beta.t <- rnorm(1, nu.t.obs, sqrt(tau2.t.obs))
+    
+    ##Update sigma2.c
+    a.c.obs        <- Nc + par.prior$a.c
+    b2.c.obs       <-  {par.prior$a.c*par.prior$b2.c + sum({Yobs[W==0]-theta$beta.c}^2)}/a.c.obs
+    theta$sigma2.c <- {a.c.obs*b2.c.obs}/rchisq(1, a.c.obs)
+    
+    ##Update sigma2.t
+    a.t.obs        <- Nt + par.prior$a.t
+    b2.t.obs       <-  {par.prior$a.t*par.prior$b2.t + sum({Yobs[W==1]-theta$beta.t}^2)}/a.t.obs
+    theta$sigma2.t <-  {a.t.obs*b2.t.obs}/rchisq(1, a.t.obs)      
+    
+    rm(tau2.c.obs, nu.c.obs,tau2.t.obs, nu.t.obs, a.c.obs, b2.c.obs, a.t.obs, b2.t.obs)
+    
+    if(sum(l == draws)==1){
+      j <- j+1
+      
+      Theta[j,]<- unlist(theta)
+      
+      # Imputate the missing potential outcomes using Ymis | Yobs, W, X, theta
+      Y0<-Y1<-NULL
+      
+      Y0[W==0]<- Outcome.obs[W==0] # values with no log transf
+      Y0[W==1]<- exp(rnorm(Nt, theta$beta.c, sqrt(theta$sigma2.c))) # inverse transf
+      
+      Y1[W==0]<- exp(rnorm(Nc, theta$beta.t, sqrt(theta$sigma2.t))) # inverse transf
+      Y1[W==1]<- Outcome.obs[W==1] # values with no log transf
+      
+      Estimands[j,"ate.fs"] <- mean(Y1) - mean(Y0)
+      Estimands[j,"ate.sp"] <- exp(theta$beta.t + 0.5*theta$sigma2.t)-exp(theta$beta.c +0.5*theta$sigma2.c) # HINT
+    }
+  }
+  
+  # Sim posterior distrib of ATE.FS and ATE.SP
+  probs<-c((1-cred.level)/2,1-(1-cred.level)/2)  # hint
+  
+  est<-round(cbind(apply(Estimands,2,mean),
+                   apply(Estimands,2,sd),
+                   apply(Estimands,2,median),
+                   apply(Estimands,2,function(x) quantile(x,probs[1])),
+                   apply(Estimands,2,function(x) quantile(x,probs[2]))),4)
+  colnames(est)<-c("Mean"," sd"," Median"," CI low"," CI up")
+  print(est)
+  
+  parms<-round(cbind(apply(Theta,2,mean),  
+                     apply(Theta,2,sd)),4)
+  colnames(parms)<-c("Mean"," sd")
+  print(parms)
+  
+  return(list(Theta=Theta, Estimands=Estimands))}
+
+
+par.prior <- list(nu.c=0, nu.t=0, tau2.c=100^2, tau2.t=100^2, a.c=2, b2.c=0.01, a.t=2, b2.t=0.01)
+
+
+chain.mB<-mcmc.m5(niter=25000, nburn=5000, thin=1,  par.prior, 
+                  Outcome.obs=df_jobs$depress6, W=df_jobs$Z, seed=2022, theta.start=NULL)
+
+
+## Overlapping histograms of the simulated posterior distribution of ATE.FS
+hist(chain.mB$Estimands[,"ate.fs"], freq=FALSE, breaks = 20,
+     main = "Average Treatment Effect", 
+     xlab="",ylab="", 
+     cex.lab=2.5, density=30, col="#FC4E07")
+
+hist(chain.mB$Estimands[,"ate.sp"], freq=FALSE, breaks=20,add=TRUE, col="#00AFBB", density=20)
+legend("topright", cex=c(0.8,0.8,0.8), lty=c(1,1,1), col= c("#FC4E07", "#00AFBB"), legend=c("ATE.FS","ATE.SP"))
+```
+
+
+## 6. (a) Bayesian model-based analysis with covariates. 
+### Bayesian model-based analysis with covariates for the outcome variable “depression six months after the intervention assignment.” Assume that Yi(0) and Yi(1) are independent and are both log-normally distributed conditional on covariates.
+
+Derive the posterior distributions of the finite sample average causal effect and the super-population average causal effect. Plot the resulting posterior distributions in a histogram and report the following summary statistics of the resulting posterior distributions: mean, standard deviation, median, 2.5% and 97.5% percentiles. 
+
+Compare the results with those obtained without condition on the covariates
+
+```{r}
+mcmc.m6 <- function(niter, nburn, thin=1,  
+                     par.prior, Outcome.obs, W, X,
+                     seed=NULL, theta.start=NULL, cred.level = 0.95){
+  
+    Yobs <- log(Outcome.obs) # log transf
+    
+    Nc<- sum(1-W); Nt<- sum(W); N<- Nt+Nc
+    XX <- as.matrix(cbind(1,X))
+    nxx<-ncol(XX)
+    
+    draws<- seq((nburn+1), niter, by=thin)
+    ndraws<- length(draws)
+    j <- 0
+    
+    # Start values
+    lm.w0<- summary(lm(Yobs[W==0] ~ X[W==0,]))  # cond on covars
+    lm.w1<- summary(lm(Yobs[W==1] ~ X[W==1,]))
+    if(is.null(theta.start)==TRUE){
+    
+    theta <- list(beta.c =  as.numeric(lm.w0$coefficients[,1]) + rnorm(nxx,0, 0.1),
+                  beta.t =  as.numeric(lm.w1$coefficients[,1]) + rnorm(nxx,0, 0.1),
+                  sigma2.c =  as.numeric(lm.w0$sigma^2) + rnorm(1,0, 0.01), 
+                  sigma2.t = as.numeric(lm.w1$sigma^2)  + rnorm(1,0, 0.01))
+    
+  }else{
+    theta<- theta.start
+  }
+  
+  Theta <- matrix(NA, ndraws,  length(unlist(theta)) )
+  colnames(Theta) <- names(unlist(theta))
+  
+  Estimands<- matrix(NA, ndraws, 2)
+  colnames(Estimands)<- c("ate.fs", "ate.sp")
+  
+  if(is.null(seed)==FALSE){
+    set.seed(seed)}
+  
+  for(l in 1:niter){
+    
+    # Update beta.c
+    Omega.c.obs   <- solve(solve(par.prior$Omega.c) + t(XX[W==0,])%*%XX[W==0,]/theta$sigma2.c)
+    nu.c.obs      <- Omega.c.obs%*%(solve(par.prior$Omega.c)%*%par.prior$nu.c + t(XX[W==0,])%*%Yobs[W==0]/theta$sigma2.c)
+    theta$beta.c  <- as.numeric(rmvnorm(1, mean= nu.c.obs, sigma=Omega.c.obs))
+    
+    # Update beta.t
+    Omega.t.obs   <- solve(solve(par.prior$Omega.t) + t(XX[W==1,])%*%XX[W==1,]/theta$sigma2.t)
+    nu.t.obs      <- Omega.t.obs%*%(solve(par.prior$Omega.t)%*%par.prior$nu.t + t(XX[W==1,])%*%Yobs[W==1]/theta$sigma2.t)
+    theta$beta.t  <- as.numeric(rmvnorm(1, mean= nu.t.obs, sigma=Omega.t.obs))
+    
+    # Update sigma2.c
+    a.c.obs        <- Nc + par.prior$a.c
+    b2.c.obs       <-  {par.prior$a.c*par.prior$b2.c + sum({Yobs[W==0]-XX[W==0,]%*%theta$beta.c}^2)}/a.c.obs
+    theta$sigma2.c <-  {a.c.obs*b2.c.obs}/rchisq(1, a.c.obs)
+    
+    # Update sigma2.t
+    a.t.obs        <- Nt + par.prior$a.t
+    b2.t.obs       <- {par.prior$a.t*par.prior$b2.t + sum({Yobs[W==1]-XX[W==1,]%*%theta$beta.t}^2)}/a.t.obs
+    theta$sigma2.t <-  {a.t.obs*b2.t.obs}/rchisq(1, a.t.obs)      
+    
+    rm(Omega.c.obs, nu.c.obs, Omega.t.obs, nu.t.obs,  a.c.obs, b2.c.obs, a.t.obs, b2.t.obs)
+    
+    if(sum(l == draws)==1){
+      j <- j+1
+      
+      Theta[j,]<- unlist(theta)
+      
+      ##Imputate the missing potential outcomes using Ymis | Yobs, W, X, theta
+      Y0<-Y1<-NULL
+      
+      Y0[W==0]<- Outcome.obs[W==0] # no log transf
+      Y0[W==1]<- exp(rnorm(Nt, XX[W==1,]%*%theta$beta.c, sqrt(theta$sigma2.c))) # inverse trans
+      
+      Y1[W==0]<- exp(rnorm(Nc, XX[W==0,]%*%theta$beta.t, sqrt(theta$sigma2.t))) # inverse trans
+      Y1[W==1]<- Outcome.obs[W==1] # no log transf
+      
+      Estimands[j,"ate.fs"] <- mean(Y1)-mean(Y0)
+      Estimands[j,"ate.sp"] <- mean(exp(XX%*%theta$beta.t + 0.5*theta$sigma2.t)) - mean(exp(XX%*%theta$beta.c + 0.5*theta$sigma2.c))
+    }
+  }
+  
+  # Summary statistics of the simulated posterior distribution of ATE.FS and ATE.SP
+  probs<-c((1-cred.level)/2,1-(1-cred.level)/2)
+  
+  est<-round(cbind(apply(Estimands,2,mean),
+                   apply(Estimands,2,sd),
+                   apply(Estimands,2,median),
+                   apply(Estimands,2,function(x) quantile(x,probs[1])),
+                   apply(Estimands,2,function(x) quantile(x,probs[2]))),4)
+  
+  colnames(est)<-c("Mean"," sd"," Median"," CI low"," CI up")
+  print(est)
+  
+  
+  parms<-round(cbind(apply(Theta,2,mean),  
+                     apply(Theta,2,sd)),4)
+  colnames(parms)<-c("Mean"," sd")
+  print(parms)
+  
+  return(list(Theta=Theta, Estimands=Estimands))
+}
+
+
+X <- as.matrix(df_jobs[, c("sex","age","race","nonmarried","educ","EconHard","assertive","motivation","depress0")])
+ncov<- ncol(X)
+
+par.prior <- list(nu.c=rep(0, {ncov+1}), Omega.c=diag(100^2,{ncov+1}), 
+                  nu.t=rep(0, {ncov+1}), Omega.t=diag(100^2,{ncov+1}),
+                  a.c=2, b2.c=0.01, a.t=2, b2.t=0.01)
+
+chain.mC<-mcmc.m6(niter=20000, nburn=5000, thin=1,  
+                  par.prior, 
+                  Outcome.obs=Yobs, W=Z, X=X, 
+                  seed=2022, theta.start=NULL)
+
+## Overlapping histograms of the simulated posterior distribution of ATE.FS
+hist(chain.mC$Estimands[,"ate.fs"], freq=FALSE, breaks = 20,
+     main = "Average Treatment Effect", 
+     xlab="",ylab="", 
+     cex.lab=2.5, density=30, col="#FC4E07")
+
+hist(chain.mC$Estimands[,"ate.sp"], freq=FALSE, breaks=20,add=TRUE, col="#00AFBB", density=20)
+
+legend("topright", cex=c(0.8,0.8,0.8), lty=c(1,1,1), col= c("#FC4E07", "#00AFBB"), legend=c("ATE.FS","ATE.SP"))
+
+```
+
+```{r}
+## Overlapping histograms of the simulated posterior distribution of ATE.FS
+hist(chain.mB$Estimands[,"ate.fs"], freq=FALSE, breaks = 20,
+     main = "Finite-Sample Average Treatment Effect", 
+     xlab="",ylab="", 
+     cex.lab=2.5, density=30, col="#FC4E07")  # "#FC4E07", "#00AFBB"
+
+hist(chain.mC$Estimands[,"ate.fs"], freq=FALSE, breaks=20,add=TRUE, col="#00AFBB", density=20)
+legend("topright", cex=c(0.8,0.8,0.8), lty=c(1,1,1), col= c("#FC4E07", "#00AFBB"), legend=c("Model B","Model C")) 
+
+## Overlapping histograms of the simulated posterior distribution of ATE.PS
+hist(chain.mB$Estimands[,"ate.sp"], freq=FALSE, breaks = 20,
+     main = "Super-Population Average Treatment Effect", 
+     xlab="",ylab="", 
+     cex.lab=2.5, density=30, col="#FC4E07")  # "#FC4E07", "#00AFBB"
+
+hist(chain.mC$Estimands[,"ate.sp"], freq=FALSE, breaks=20,add=TRUE, col="#00AFBB", density=20)
+legend("topright", cex=c(0.8,0.8,0.8), lty=c(1,1,1), col= c("#FC4E07", "#00AFBB"), legend=c("Model B","Model C"))
+```
+Looking at the that distributions, going from the model B without condition on covariates to model C with it, this seem to have an effect on the outcome, considering, e.g. that the curve are shifted to the left.
+
+
+# PART 2 | Observational Studies
+## 1. Load the dataset. Temporarily remove the outcome, OUTCOME, from the data set.
+
+```{r}
+library(ggplot2)
+library(MatchIt)
+```
+
+
+```{r}
+# import file
+df_lux_all <- read.table('TrainingLux.txt')
+df_lux_all
+```
+
+
+
+```{r}
+# df withou Outcome
+df_lux <- df_lux_all[, !(names(df_lux_all) == "Outcome")]
+df_lux
+
+# Covariates
+X <- df_lux[, !(names(df_lux) == "TREAT")]
+X
+```
+
+
+## 2. For each covariate, display the mean within each treatment group and the standardized difference in a table.
+
+```{r}
+std_diff <- function(x, treat){
+  
+  ### Param checks
+  # Check for NAs in x
+  if(any(is.na(x))){warning("NAs removed, check x and think of other options")}
+  
+  # Check for NAs in treat
+  if(any(is.na(treat))){stop("treatment indicator 'treat' is not supposed to contain NA, check it!")}
+  
+  # Mean
+  mean <- mean(x, na.rm = TRUE)
+  
+  ### Mean of 'x' among treated and control units
+  mean.t <- mean(x[treat == 1], na.rm = TRUE)
+  mean.c <- mean(x[treat == 0], na.rm = TRUE)
+  
+  ### Variance of 'x' among treated and control units
+  var.t <- var(x[treat == 1], na.rm = TRUE)
+  var.c <- var(x[treat == 0], na.rm = TRUE)
+  
+  ### Standardized difference in means
+  std.diff <- (mean.t - mean.c) / sqrt((var.t + var.c)/2)
+  
+  ### Returning results
+  res <- c(Mean = mean, Mean.t = mean.t, Mean.c = mean.c, Sd.t = sqrt(var.t), Sd.c = sqrt(var.c), Std.Mean.Diff = std.diff)
+  return(res)
+}
+
+t(sapply(X, std_diff, treat = df_lux$TREAT, simplify = TRUE))
+```
+
+
+## 3. Estimate a propensity score for each unit in the observational study using the fitted values from a logistic regression with main effects for all of the covariates contained in the data set (leave out transformations and interactions here, but we would generally want to explore these other terms).
+
+Compare graphically the distributions of estimated propensity scores within the treatment groups and explain what you see.
+
+```{r}
+# propensity score
+mod <- glm(TREAT~., data=df_lux, family=binomial(link=logit))
+summary(mod)
+pscores <- mod$fitted.values
+
+std_diff(pscores, treat = df_lux$TREAT)
+
+# dens overlap
+density_overlap <- function(x, treat, alpha = 0.25){
+  
+  ### Formatting data
+  data <- data.frame(Legend = c(rep("Treated", sum(treat)), rep("Controls", sum(treat == 0))), Value = c(x[treat ==1], x[treat == 0]))
+  
+  ### Calling 'ggplot'
+  ggplot(data, aes(x = Value, fill = Legend)) + geom_density(alpha = alpha)
+}
+
+
+# Hist overlap
+hist_overlap <- function(x, treat, alpha = 0.5, ...){
+  
+  ### Formatting data
+  data <- data.frame(Legend = c(rep("Treated", sum(treat)), rep("Controls", sum(treat == 0))), Value = c(x[treat ==1], x[treat == 0]))
+  
+  ### Calling 'ggplot'
+  ggplot(data, aes(x = Value, fill = Legend, after_stat(density))) + geom_histogram(alpha = alpha, position = "identity", ...)
+}
+
+density_overlap(x = pscores, treat = df_lux$TREAT)
+hist_overlap(x = pscores, treat = df_lux$TREAT, bins = 20)
+```
+The non-treated distribution is more condensed to the origin, showing a significant difference on distributions of the treated and control groups.
+
+We already know that in this observational study, so in this dataset, subjects were not randomly assigned to treatment and this graph underline this statment. The treatment assignment have been affected by specific values of units' covariates, in a preferential way considering some characteristics, showing a lack of randomness.
+
+
+
+## 4. What are the implications of the fact that the propensity score is a balancing score?
+
+Propensity score is useful for achieving covariate balance in observational studies, since the lack of balance could influence the reliability of causal effect estimates, as the treated and control groups may not be comparable with respect to observed covariates. 
+
+The propensity score serves as a summary measure of the covariates, and how the distribution of X appears balanced between treated and control groups.
+
+The propensity score is the coarsest balancing score, it is a function of every balancing score, so it provides the biggest benefit in terms of reducing the number of variables we need to adjust for.
+
+Its advantage lies in significantly reducing the number of variables requiring adjustment.
+
+
+
+## 5. Trimming and subclassification on propensity score. Now assess balance and create balanced groups.
+
+### (a) In order to do so, first discard control units with estimated propensity scores lower than the minimum of the active treated units estimated propensity scores or higher than the maximum of the active treatment units estimated propensity scores. 
+
+How many units did you discard? Why is it important to discard these units?
+
+```{r}
+### 2) TRIMMING
+
+# We want to discard control units having PS lower than the min PS for the treated. 
+# We could also discard treated units for a common support but in this case we prefer to salvage all the n treated
+
+by(pscores,df_lux$TREAT,summary) 
+
+mincut <- min(pscores[df_lux$TREAT==1])
+maxcut <- max(pscores[df_lux$TREAT==1])
+
+df_lux2 <- df_lux[pscores>=mincut & pscores<=maxcut,]
+
+nrow(df_lux) - nrow(df_lux2)  # number discarded
+table(df_lux2$TREAT)          # only controls discarded, as we wanted
+discarded <- which(pscores < mincut | pscores > maxcut) # discarded units
+#discarded
+```
+I've discarded 370 units. 
+It's important to discard these units to achieve common support between the treatment and control groups, ensuring that the distribution of estimated propensity scores overlaps for both groups. This helps in creating balanced groups and improve the lack of randomization. Removing units make the estimated treatment effects more reliable and reduce the potential for bias.
+
+
+```{r}
+# 2.1) Standardized Diff. in Mean for the trimmed data
+X.trim <- df_lux2[, !(names(df_lux2) == "TREAT")]
+t(sapply(X.trim, std_diff, treat = df_lux2$TREAT, simplify = TRUE))
+
+# 2.2) Re-estimation of the propensity score
+mod2 <- glm(TREAT~., data = df_lux2, family = binomial(link=logit))
+summary(mod2)
+pscores2 <- mod2$fitted.values
+
+# 2.3) Balance assessment (Standardized Diff. in Mean and graphical checks)
+std_diff(pscores2, treat = df_lux2$TREAT)
+hist_overlap(pscores2, treat = df_lux2$TREAT)
+```
+
+
+### (b) Using the units remaining after 5(a), create five subclasses based on the estimated propensity score. 
+You are allowed to choose size and bounds of the subclasses. You are supposed to create the best subclasses based on your own reasoning. Create a table showing the number of treated and control units within each of the five subclasses.
+
+Briefly comment and explain your choice. (Hint: look at the distribution of the propensity score in the two groups, check the overlap, check the balance within subclasses and the number of treated and control units, etc).
+
+```{r}
+### 3) SUBCLASSIFICATION BASED ON THE PROPENSITY SCORE
+
+# The goal is to create subclasses of treated and control units sharing
+# similar values for the propensity score
+
+# 3.1) Defining subclasses from the inspection of the quantiles table
+quant.tab <- data.frame(Quantiles = seq(0,1, by=0.05),
+                        PS.Controls = as.numeric(quantile(pscores2[df_lux2$TREAT==0],probs=seq(0,1, by=0.05))),
+                        PS.Treated = as.numeric(quantile(pscores2[df_lux2$TREAT==1],probs=seq(0,1, by=0.05))),
+                        PS.Whole = as.numeric(quantile(pscores2,probs=seq(0,1, by=0.05))))
+
+breaks <- quantile(pscores2, c(.65, .80, .85, .9))  #, .95))  # .4, .75, .85, .9, .95)) 
+bins <- rep(NA,nrow(df_lux2))
+bins[pscores2<=breaks[1]] <- 1
+bins[pscores2>breaks[1] & pscores2<=breaks[2]] <- 2
+bins[pscores2>breaks[2] & pscores2<=breaks[3]] <- 3
+bins[pscores2>breaks[3] & pscores2<=breaks[4]] <- 4
+bins[pscores2>breaks[4]] <-5 # & pscores2<=breaks[5]] <- 5
+#bins[pscores2>breaks[5]] <- 6
+
+table(bins, df_lux2$TREAT)        # Number of T and C in each subclass
+table(bins)                    # Tot number of people in each subclass
+
+# 3.2) Balance assessment within each block
+# Standardized Diff. in Mean
+mapply(1:length(unique(bins)), FUN = function(b)(std_diff(pscores2[bins == b], treat = df_lux2$TREAT[bins == b])))
+# mapply(X.trim, FUN = function(x)(std_diff_block(x, treat = df_lux2$TREAT, blocks = bins, weights = "total")))
+```
+
+
+
+(c) Use descriptive tools (graphs and statistics) to assess covariate balance.
+
+```{r}
+# Graphical balance assessment
+density_overlap <- function(x, treat, alpha = 0.25){
+  
+  ### Formatting data
+  data <- data.frame(Legend = c(rep("Treated", sum(treat)), rep("Controls", sum(treat == 0))), Value = c(x[treat ==1], x[treat == 0]))
+  
+  ### Calling 'ggplot'
+  ggplot(data, aes(x = Value, fill = Legend)) + geom_density(alpha = alpha)
+}
+
+mapply(unique(bins)[order(unique(bins))], 
+       FUN = function(B)(density_overlap(x = pscores2[bins == B], treat = df_lux2$TREAT[bins == B]) +
+                           ggtitle(paste("Overlap, block", B))), SIMPLIFY = FALSE)
+```
+After some attemps I reached this as my best fitting overlap between Trated and Control.
+The first block has a significant area of non-overlapping, but the other blocks show a better situation.
+That's underlined also in the stat table where: Mean.t = 0.014628061, Mean.c = 0.008879947 in case of block 1, showing a significant difference. Similarly, in block 5, but still with a good fitting.
+
+
+## 6. Analysis phase
+
+(a) Now that the study design phase is complete, read in the outcome, Outcome.
+
+(b) Naively pretending that this observational study was actually a completely randomized experiment, and ignoring covariates, calculate a Neyman estimate of the average treatment effect and a large sample 95% interval and enter both in a table.
+
+(c) Calculate the naive Neyman estimate as in the previous point, but on the subset of units obtained in 5(a). 
+
+Report it in the table and comment briefly.
+
+
+```{r}
+# analysis
+df_lux$Outcome <- df_lux_all$Outcome
+df_lux
+
+df_lux2$Outcome <- df_lux_all$Outcome[-discarded]
+df_lux2
+
+neyman <- function(outcome, treat, alpha){
+  
+  # Settings
+  Yt <- outcome[treat == 1]
+  Yc <- outcome[treat == 0]
+  Nt <- length(Yt)
+  Nc <- length(Yc)
+  
+  # ATE
+  ate <- mean(Yt) - mean(Yc)
+  
+  # Variance estimator
+  Var.t <- var(Yt)
+  Var.c <- var(Yc)
+  Var <- Var.t / Nt + Var.c / Nc
+  
+  # Exporting results
+  res <- cbind(ATE = ate, Var = Var, int.lower = ate - sqrt(Var)*qnorm(1-alpha/2), int.upper = ate + sqrt(Var)*qnorm(1-alpha/2))
+  return(res)
+}
+```
+
+
+```{r}
+### 2) ATE, Naive Neyman (i.e., Neyman as if dataset was randomized)
+ney.naive <- neyman(outcome = df_lux$Outcome, treat = df_lux$TREAT, alpha = 0.05)
+ney.naive
+
+### 3) ATE, Neyman on the trimmed subset
+ney.trimm <- neyman(outcome = df_lux2$Outcome, treat = df_lux2$TREAT, alpha = 0.05)
+ney.trimm
+
+ney <- rbind(ney.naive,ney.trimm)
+
+rownames(ney) <- c("ATE Naive Neyman", "ATE Naive Neyman on trimmed subset")
+round(ney,2)
+```
+The interval on the trimmed subset is slightly narrower.
+
+
+## 7. Your own preferred analysis. Use any other methods (Matching with or without replacement, Bias-adjusted estimators, IPTW, regression, DR, CART, BART etc...) for estimating ATE, ATT or other causal effects you believe are relevant for the study. You may also investigate treatment effect heterogeneity and estimate CATEs. In R you can use any package, including the ones suggested during lectures, e.g., Matchit). 
+
+Please briefly present the method and explain your preference and discuss results you have obtained.
+
+```{r}
+### 5) Estimating ATT on matched data
+
+# 4.2) Non-Exact Matching: Nearest Neighbors with Propensity Score
+ 
+# Without replacement, discarding control units  
+# outside the support of the distance measure of the treated units 
+m.nn1 <- matchit(TREAT~ ., data = df_lux, method = "nearest", discard='control', distance = "glm")
+m.nn1
+summary(m.nn1) ## how many units are matched? --> "THE" nearest neighbor
+plot(summary(m.nn1))
+summary(m.nn1$distance)
+summary(pscores2)
+
+# Obtain matched dataset from MatchIt output
+m.mydata <- match.data(m.nn1)
+head(m.mydata)
+
+# Neyman's method for estimating causal effects is used to calculate the Average Treatment Effect on the Treated (ATT)
+ney_match <- neyman(outcome = m.mydata$Outcome, treat = m.mydata$TREAT, alpha = 0.05)
+ney_match
+
+# Regression
+summary(lm(Outcome~TREAT, data=m.mydata))
+```
+I've used MatchIt function with the "nearest" method to perform nearest neighbor matching without replacement and Neyman's method to estimate the ATT using the matched dataset. 
+The balance assessment shows that the matching procedure has improved balance across covariates in the matched dataset.
+
+The estimated ATT is approximately 0.0304 with a confidence interval spanning from -0.0115 to 0.0723, thus the treatment effect may be positive, negative or zero.
+
+The linear regression results confirm the estimated treatment effect, but with the absence of statistical significance in the regression results suggests that there isn't strong evidence to reject the null hypothesis that the treatment effect is zero.
+
